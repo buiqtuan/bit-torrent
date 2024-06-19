@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use serde::Deserializer;
 use serde_json;
 use std::env;
 use std::fmt;
@@ -15,7 +16,7 @@ struct Info {
     #[serde(rename = "piece length")]
     plength: usize,
     name: String,
-    piece: Vec<u8>,
+    piece: Hashes,
     #[serde(flatten)]
     key: Keys,
 }
@@ -33,39 +34,34 @@ struct File {
     path: Vec<String>,
 }
 
-struct HashStrVisitor;
+#[derive(Debug, Clone)]
+struct Hashes(Vec<[u8; 20]>);
 
-impl<'de> Visitor<'de> for I32Visitor {
-    type Value = Vec<[u8;20]>;
+struct HashesVisitor;
+
+impl<'de> Visitor<'de> for HashesVisitor {
+    type Value = Hashes;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a byte string whose lenght is multiple of 20")
+        formatter.write_str("a byte string whose length is multiple of 20")
     }
 
-    fn visit_i8<E>(self, value: i8) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(i32::from(value))
-    }
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
 
-    fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(value)
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        use std::i32;
-        if value >= i64::from(i32::MIN) && value <= i64::from(i32::MAX) {
-            Ok(value as i32)
-        } else {
-            Err(E::custom(format!("i32 out of range: {}", value)))
+        if v.len() % 20 != 0 {
+            return Err(E::custom(format!("length is {}", v.len())));
         }
+
+        // use array_chunks when stable
+        return Ok(Hashes(
+            v.chunks_exact(20)
+            .map(|slice_20| {
+                slice_20.try_into().expect("The lenght of this slice should be 20")
+            })
+            .collect()
+        ));
     }
 
     // Similar for other methods:
@@ -74,6 +70,15 @@ impl<'de> Visitor<'de> for I32Visitor {
     //   - visit_u16
     //   - visit_u32
     //   - visit_u64
+}
+
+impl<'de> Deserialize<'de> for Hashes {
+    fn deserialize<D>(deserializer: D) -> Result<Hashes, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(HashesVisitor)
+    }
 }
 
 fn decode_bencoded_value(encode_value: &str) -> (serde_json::Value, &str) {
